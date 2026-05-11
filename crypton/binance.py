@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -30,6 +30,16 @@ class BinancePublicClient:
             self._bases = ["https://api.binance.com"]
         self._base_idx = 0
         self._client = self._new_client()
+
+    @property
+    def bases_fingerprint(self) -> Tuple[str, ...]:
+        """Stable id for cache keys (order of mirror URLs)."""
+        return tuple(self._bases)
+
+    @property
+    def effective_base_url(self) -> str:
+        """Host httpx is currently using."""
+        return self._bases[self._base_idx]
 
     def _new_client(self) -> httpx.Client:
         return httpx.Client(
@@ -69,6 +79,7 @@ class BinancePublicClient:
                 except httpx.HTTPStatusError as e:
                     last_err = e
                 if self._advance_base():
+                    time.sleep(self._settings.binance_mirror_retry_delay_s)
                     continue
                 if last_err:
                     raise last_err

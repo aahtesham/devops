@@ -89,6 +89,8 @@ This project **no longer uses Pydantic** for the web API, so **`pip install -r r
 ## Notes
 
 - Uses **public** endpoints only (no API keys).
-- If Binance returns **HTTP 451** (or **403**) from your Render region, set **`BINANCE_BASE_URL`** (e.g. US: **`https://api.binance.us`**) or rely on **`BINANCE_FALLBACK_BASE_URLS`** (defaults to `api1`–`api3` mirrors; set to **`off`** to disable).
+- If Binance returns **HTTP 451** (or **403**) from your Render region, set **`BINANCE_BASE_URL`** (e.g. US: **`https://api.binance.us`**) or rely on **`BINANCE_FALLBACK_BASE_URLS`** (defaults to `api1`–`api3` mirrors; set to **`off`** to disable). **`BINANCE_MIRROR_RETRY_DELAY_S`** (default `0.35`) pauses between mirror attempts.
+- **`EXCHANGE_INFO_CACHE_SECONDS`** (default `300`): cache `exchangeInfo` in memory so repeat `/api/v1/symbols` calls do not hit Binance every time (first request still needs a working IP).
+- **Double-slash URLs** (`//api/v1/...`): the app normalizes them; **`GET /`** returns **`full_urls`** you can copy safely (origin has no trailing slash).
 - This is a **filtering tool**, not trading advice.
 - For production scheduling on Render, run as a **Cron Job** or background worker if scans exceed HTTP timeouts.

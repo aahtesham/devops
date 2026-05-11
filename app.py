@@ -13,7 +13,10 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
+import httpx
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -57,6 +60,22 @@ def _parse_bool(qp: Any, key: str, default: bool) -> bool:
     if raw is None or raw == "":
         return default
     return raw.lower() in ("1", "true", "yes", "on")
+
+
+def _public_origin(request: Request) -> str:
+    """No trailing slash — safe to concatenate ``/path``."""
+    return str(request.base_url).rstrip("/")
+
+
+class DedupeSlashMiddleware(BaseHTTPMiddleware):
+    """Turn ``//api/v1/...`` (double slash) into ``/api/v1/...`` so routes match."""
+
+    async def dispatch(self, request: Request, call_next):
+        p = request.url.path
+        if "//" in p:
+            fixed = "/" + "/".join(segment for segment in p.split("/") if segment)
+            request.scope["path"] = fixed
+        return await call_next(request)
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -108,8 +127,19 @@ def api_symbols(request: Request) -> JSONResponse:
     except ValueError as e:
         return _json({"detail": str(e)}, 400)
     s = Settings.from_env()
-    with BinancePublicClient(s) as client:
-        symbols = fetch_spot_usdt_symbols(client)
+    try:
+        with BinancePublicClient(s) as client:
+            symbols = fetch_spot_usdt_symbols(client)
+    except httpx.HTTPStatusError as e:
+        code = e.response.status_code
+        return _json(
+            {
+                "detail": f"Binance HTTP {code} from Render/server IP (your browser can still work from home).",
+                "binance_url": str(e.request.url),
+                "hint_451_403": "Set Render env BINANCE_BASE_URL (e.g. https://api.binance.us for US). Mirrors retry with a short delay.",
+            },
+            502,
+        )
     if max_n > 0:
         symbols = symbols[:max_n]
     return _json(
@@ -250,20 +280,24 @@ def api_scan(request: Request) -> JSONResponse:
 
 
 def root(request: Request) -> JSONResponse:
+    o = _public_origin(request)
+    rel = [
+        "/health",
+        "/api/v1/meta",
+        "/api/v1/upstream",
+        "/api/v1/symbols?max=10",
+        "/api/v1/klines/BTCUSDT?interval=1h&limit=50",
+        "/api/v1/ticker/top-volume?top=20",
+        "/api/v1/rsi/BTCUSDT",
+        "/api/v1/scan?max_symbols=15",
+    ]
     return _json(
         {
             "service": "crypton",
             "framework": "starlette",
-            "health": "/health",
-            "endpoints": [
-                "GET /api/v1/meta",
-                "GET /api/v1/upstream",
-                "GET /api/v1/symbols?max=0",
-                "GET /api/v1/klines/{symbol}?interval=1h&limit=300",
-                "GET /api/v1/ticker/top-volume?top=50",
-                "GET /api/v1/rsi/{symbol}",
-                "GET /api/v1/scan?max_symbols=80&output_all=false&staircase=52,53,54,55",
-            ],
+            "note": "Use paths with a single leading slash. Copy from full_urls to avoid //api typos.",
+            "paths_relative": rel,
+            "full_urls": [f"{o}{p}" for p in rel],
         }
     )
 
@@ -280,4 +314,7 @@ routes = [
     Route("/", root, methods=["GET"]),
 ]
 
-app = Starlette(routes=routes)
+app = Starlette(
+    routes=routes,
+    middleware=[Middleware(DedupeSlashMiddleware)],
+)

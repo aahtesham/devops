@@ -72,6 +72,8 @@ class Settings:
     min_bars_for_rsi: int = 60
     # Sleep between kline requests to reduce 429 risk (seconds)
     request_delay_s: float = 0.08
+    # After 451/403, sleep before trying next Binance mirror (seconds).
+    binance_mirror_retry_delay_s: float = 0.35
     # 0 = no cap (all symbols); else only first N after stable sort
     max_symbols: int = 0
     # If set (default 52,53,54,55): strategy = staircase strict-up on last N RSI bars.
@@ -94,6 +96,7 @@ class Settings:
             rsi_period=_env_int("RSI_PERIOD", 14),
             min_bars_for_rsi=_env_int("MIN_BARS_FOR_RSI", 60),
             request_delay_s=_env_float("REQUEST_DELAY_S", 0.08),
+            binance_mirror_retry_delay_s=_env_float("BINANCE_MIRROR_RETRY_DELAY_S", 0.35),
             max_symbols=_env_int("MAX_SYMBOLS", 0),
             strategy_staircase_levels=_parse_staircase_env(),
             strategy_rsi_min=_env_float("STRATEGY_RSI_MIN", 50.0),
