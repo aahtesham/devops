@@ -39,19 +39,21 @@ export MAX_SYMBOLS=200
 python main.py
 ```
 
-## HTTP API (FastAPI)
+## HTTP API (Starlette)
 
-Maps **Binance Spot** public REST paths under `/api/v1/*` (no API keys).
+Maps **Binance Spot** public REST paths under `/api/v1/*` (no API keys). Uses **Starlette** only (no FastAPI / Pydantic → **no `pydantic-core`**, so Render **Python 3.14** builds do not need Rust).
 
 ```bash
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
+There is **no `/docs` Swagger** in this stack; call routes directly or use `GET /` for the route list.
+
 | Route | Binance / behavior |
 |-------|--------------------|
 | `GET /api/v1/meta` | Service config + which upstream paths are used |
 | `GET /api/v1/upstream` | Base URL + path names |
-| `GET /api/v1/symbols?max=0` | `GET /api/v3/exchangeInfo` → TRADING + USDT + `SPOT` |
+| `GET /api/v1/symbols?max=0` | `GET /api/v3/exchangeInfo` → TRADING + USDT + SPOT |
 | `GET /api/v1/klines/{symbol}` | `GET /api/v3/klines` |
 | `GET /api/v1/ticker/top-volume?top=50` | `GET /api/v3/ticker/24hr` → USDT, sorted by `quoteVolume` |
 | `GET /api/v1/rsi/{symbol}` | klines + local Wilder RSI snapshot |
@@ -59,13 +61,15 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 **Render start command:** `uvicorn app:app --host 0.0.0.0 --port $PORT`
 
-### Render build: `pydantic-core` / Rust / read-only filesystem
+### Render build: `pydantic-core` / Rust (legacy)
 
-If the build uses **Python 3.14**, `pydantic-core` may try to **compile from source** (Rust/maturin) and fail with **read-only file system** for Cargo. Fix: use **Python 3.12.x** so pip gets **binary wheels**.
+This project **no longer uses Pydantic** for the web API, so **`pip install -r requirements.txt` should not compile Rust**, even on **Python 3.14**.
 
-1. In the Render service: **Environment → add** `PYTHON_VERSION` = `3.12.8` (or another **3.12** patch Render supports).
-2. Commit **`runtime.txt`** (`python-3.12.8`) and **`.python-version`** from this repo so the platform picks 3.12 when supported.
-3. Redeploy (clear build cache if the old 3.14 venv sticks).
+**Optional — Docker or Python 3.12** (if you reintroduce compiled deps later):
+
+**Option A — Docker:** **Settings → Runtime → Docker**; use the repo **`Dockerfile`** (`python:3.12-slim-bookworm`). **Clear build cache** → deploy. Leave the dashboard **Build Command empty** for Docker (installs happen in the Dockerfile).
+
+**Option B — Native Python 3.12:** Set **`PYTHON_VERSION=3.12.8`** and/or **`NIXPACKS_PYTHON_VERSION=3.12`**, then clear cache and redeploy.
 
 ## Notes
 

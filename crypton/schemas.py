@@ -1,47 +1,27 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, Optional
 
-from crypton.binance import BinancePublicClient
-
-
-def _symbol_has_spot(row: Dict[str, Any]) -> bool:
-    """
-    Binance often returns `"permissions": []` and uses `permissionSets` + flags instead.
-    See: https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md
-    """
-    if row.get("isSpotTradingAllowed") is True:
-        return True
-    perms = row.get("permissions") or []
-    if "SPOT" in perms:
-        return True
-    for group in row.get("permissionSets") or []:
-        if isinstance(group, (list, tuple)) and "SPOT" in group:
-            return True
-    return False
+from crypton.scanner import SymbolScan
 
 
-def fetch_spot_usdt_symbols(client: BinancePublicClient) -> List[str]:
-    """
-    Return Binance *spot* USDT symbols that are TRADING and spot-eligible.
+def symbol_scan_to_dict(r: SymbolScan) -> Dict[str, Any]:
+    return {
+        "symbol": r.symbol,
+        "reason": r.reason,
+        "rsi_eligible": r.rsi_eligible,
+        "strategy_match": r.strategy_match,
+        "rsi_last_closed": r.rsi_last_closed,
+        "rsi_prev_closed": r.rsi_prev_closed,
+        "last_close": r.last_close,
+        "rsi_staircase_window": r.rsi_staircase_window,
+    }
 
-    Uses: GET /api/v3/exchangeInfo (with permissions=SPOT when supported).
-    """
-    data: Dict[str, Any] = client.get_json(
-        "/api/v3/exchangeInfo",
-        params={"permissions": "SPOT"},
-    )
-    symbols_out: List[str] = []
-    for row in data.get("symbols", []):
-        if row.get("status") != "TRADING":
-            continue
-        if row.get("quoteAsset") != "USDT":
-            continue
-        if not _symbol_has_spot(row):
-            continue
-        sym = row.get("symbol")
-        if isinstance(sym, str) and sym.endswith("USDT"):
-            symbols_out.append(sym)
 
-    symbols_out.sort()
-    return symbols_out
+def upstream_map_dict(base_url: str) -> Dict[str, Any]:
+    return {
+        "base_url": base_url,
+        "exchange_info": "GET /api/v3/exchangeInfo",
+        "klines": "GET /api/v3/klines",
+        "ticker_24h": "GET /api/v3/ticker/24hr",
+    }
