@@ -59,7 +59,22 @@ There is **no `/docs` Swagger** in this stack; call routes directly or use `GET 
 | `GET /api/v1/rsi/{symbol}` | klines + local Wilder RSI snapshot |
 | `GET /api/v1/scan?max_symbols=80` | full scan (slow; keep `max_symbols` small on Render free) |
 
-**Render start command:** `uvicorn app:app --host 0.0.0.0 --port $PORT`
+**Render build command (use this instead of plain `pip install` until you confirm no extra manifests):**
+
+```bash
+bash build.sh
+```
+
+`build.sh` installs `requirements.txt` and **exits with an error if Pydantic is present** (so you catch a stale `pyproject.toml` / wrong file on the service root).
+
+If the script fails with “pydantic must not be installed”, search your **deploy root** for anything that still pins FastAPI/Pydantic:
+
+- `requirements.txt`, `requirements-dev.txt`
+- `pyproject.toml` / `poetry.lock` / `Pipfile` / `Pipfile.lock`
+
+Render may install from **`pyproject.toml`** even when `requirements.txt` exists, depending on how the service is configured—**remove or fix** those files in the repo you actually deploy.
+
+**Start command:** `uvicorn app:app --host 0.0.0.0 --port $PORT`
 
 ### Render build: `pydantic-core` / Rust (legacy)
 
@@ -74,6 +89,6 @@ This project **no longer uses Pydantic** for the web API, so **`pip install -r r
 ## Notes
 
 - Uses **public** endpoints only (no API keys).
-- If you see `httpx.ProxyError` / `403` through a corporate proxy, the default is **not** to trust `HTTP(S)_PROXY`. To force using system proxy settings: `export HTTPX_TRUST_ENV=1`.
+- If Binance returns **HTTP 451** (or **403**) from your Render region, set **`BINANCE_BASE_URL`** (e.g. US: **`https://api.binance.us`**) or rely on **`BINANCE_FALLBACK_BASE_URLS`** (defaults to `api1`–`api3` mirrors; set to **`off`** to disable).
 - This is a **filtering tool**, not trading advice.
 - For production scheduling on Render, run as a **Cron Job** or background worker if scans exceed HTTP timeouts.

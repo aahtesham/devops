@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 
 def _env_int(name: str, default: int) -> int:
@@ -42,6 +42,20 @@ def _parse_staircase_env() -> Optional[Tuple[float, ...]]:
     return parse_staircase_levels_string(raw)
 
 
+def _parse_fallback_base_urls(raw: Optional[str]) -> Tuple[str, ...]:
+    """
+    Extra Binance Spot REST bases to try if the primary returns 451/403 (geo / legal).
+    Default: api1–api3 mirrors. Set BINANCE_FALLBACK_BASE_URLS=off to disable.
+    """
+    if raw is None:
+        raw = "https://api1.binance.com,https://api2.binance.com,https://api3.binance.com"
+    raw = raw.strip()
+    if raw.lower() in ("", "off", "none", "0"):
+        return ()
+    parts = [p.strip().rstrip("/") for p in raw.split(",") if p.strip()]
+    return tuple(parts)
+
+
 @dataclass(frozen=True)
 class Settings:
     """Tune scanning without code changes (env vars optional)."""
@@ -49,6 +63,8 @@ class Settings:
     # If false, httpx ignores HTTP(S)_PROXY env (helps when a corporate proxy blocks Binance).
     httpx_trust_env: bool = False
     base_url: str = "https://api.binance.com"
+    # Tried in order after base_url when Binance returns 451/403 (see binance.py).
+    binance_fallback_base_urls: Tuple[str, ...] = ()
     interval: str = "1h"
     kline_limit: int = 300
     rsi_period: int = 14
@@ -72,6 +88,7 @@ class Settings:
         return Settings(
             httpx_trust_env=os.environ.get("HTTPX_TRUST_ENV", "0") in ("1", "true", "True"),
             base_url=os.environ.get("BINANCE_BASE_URL", "https://api.binance.com"),
+            binance_fallback_base_urls=_parse_fallback_base_urls(os.environ.get("BINANCE_FALLBACK_BASE_URLS")),
             interval=os.environ.get("BINANCE_INTERVAL", "1h"),
             kline_limit=_env_int("BINANCE_KLINE_LIMIT", 300),
             rsi_period=_env_int("RSI_PERIOD", 14),
