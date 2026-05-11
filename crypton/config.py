@@ -82,6 +82,8 @@ class Settings:
     # Optional legacy strategy when staircase disabled
     strategy_rsi_min: float = 50.0
     strategy_require_rising: bool = True
+    # If true, print every RSI-eligible symbol (not only strategy matches)
+    output_all_rsi_eligible: bool = False
     # Optional: some CDNs behave differently vs python-httpx default UA (does not fix true HTTP 451 geo blocks).
     binance_user_agent: str = (
         "Mozilla/5.0 (compatible; Crypton/1.0; +https://www.binance.com/en/support)"

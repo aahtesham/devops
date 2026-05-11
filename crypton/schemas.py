@@ -1,8 +1,34 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from crypton.scanner import SymbolScan
+
+# Binance Spot GET /api/v3/klines — each row is a fixed-order array (newest last).
+# https://developers.binance.com/docs/binance-spot-api-docs/rest-api#klinecandlestick-data
+BINANCE_SPOT_KLINE_ARRAY_FIELDS: Sequence[str] = (
+    "open_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "close_time",
+    "quote_asset_volume",
+    "number_of_trades",
+    "taker_buy_base_asset_volume",
+    "taker_buy_quote_asset_volume",
+    "ignore",
+)
+
+
+def binance_kline_array_to_object(row: Sequence[Any]) -> Dict[str, Any]:
+    """Map one Binance kline array row to a JSON object (keys match array index order)."""
+    return {BINANCE_SPOT_KLINE_ARRAY_FIELDS[i]: row[i] for i in range(min(len(row), len(BINANCE_SPOT_KLINE_ARRAY_FIELDS)))}
+
+
+def klines_arrays_to_objects(klines: List[List[Any]]) -> List[Dict[str, Any]]:
+    return [binance_kline_array_to_object(row) for row in klines]
 
 
 def symbol_scan_to_dict(r: SymbolScan) -> Dict[str, Any]:

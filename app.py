@@ -24,7 +24,12 @@ from starlette.routing import Route
 from crypton.binance import BinancePublicClient
 from crypton.config import Settings, parse_staircase_levels_string
 from crypton.scanner import scan_one_symbol, scan_symbols
-from crypton.schemas import symbol_scan_to_dict, upstream_map_dict
+from crypton.schemas import (
+    BINANCE_SPOT_KLINE_ARRAY_FIELDS,
+    klines_arrays_to_objects,
+    symbol_scan_to_dict,
+    upstream_map_dict,
+)
 from crypton.symbols import fetch_spot_usdt_symbols
 
 
@@ -112,6 +117,25 @@ def meta(request: Request) -> JSONResponse:
                     "require_rising": s.strategy_require_rising,
                 },
             },
+            "klines_endpoint": {
+                "path": "GET /api/v1/klines/{symbol}",
+                "query": {
+                    "interval": "Binance interval (default from env BINANCE_INTERVAL)",
+                    "limit": "2..1000 (default 300)",
+                    "format": "array | objects — array mirrors Binance; objects use kline_array_field_order keys",
+                },
+                "kline_array_field_order": list(BINANCE_SPOT_KLINE_ARRAY_FIELDS),
+                "scan_row_fields": [
+                    "symbol",
+                    "reason",
+                    "rsi_eligible",
+                    "strategy_match",
+                    "rsi_last_closed",
+                    "rsi_prev_closed",
+                    "last_close",
+                    "rsi_staircase_window",
+                ],
+            },
         }
     )
 
@@ -158,6 +182,9 @@ def api_klines(request: Request) -> JSONResponse:
         sym = _norm_symbol(symbol)
         interval = qp.get("interval") or "1h"
         limit = _parse_int(qp, "limit", 300, min_v=2, max_v=1000)
+        fmt = (qp.get("format") or "array").strip().lower()
+        if fmt not in ("array", "objects"):
+            raise ValueError("format must be 'array' or 'objects'")
     except ValueError as e:
         return _json({"detail": str(e)}, 400)
     s = replace(Settings.from_env(), interval=interval, kline_limit=limit)
@@ -166,13 +193,19 @@ def api_klines(request: Request) -> JSONResponse:
             "/api/v3/klines",
             params={"symbol": sym, "interval": s.interval, "limit": limit},
         )
+    payload_klines: Any = klines
+    if fmt == "objects":
+        payload_klines = klines_arrays_to_objects(klines)
     return _json(
         {
-            "upstream": f"{s.base_url}/api/v3/klines",
+            "upstream": upstream_map_dict(s.base_url),
             "symbol": sym,
             "interval": interval,
+            "limit": limit,
+            "format": fmt,
+            "kline_array_field_order": list(BINANCE_SPOT_KLINE_ARRAY_FIELDS),
             "count": len(klines),
-            "klines": klines,
+            "klines": payload_klines,
         }
     )
 
@@ -286,7 +319,8 @@ def root(request: Request) -> JSONResponse:
         "/api/v1/meta",
         "/api/v1/upstream",
         "/api/v1/symbols?max=10",
-        "/api/v1/klines/BTCUSDT?interval=1h&limit=50",
+        "/api/v1/klines/BTCUSDT?interval=1h&limit=50&format=array",
+        "/api/v1/klines/BTCUSDT?interval=1h&limit=50&format=objects",
         "/api/v1/ticker/top-volume?top=20",
         "/api/v1/rsi/BTCUSDT",
         "/api/v1/scan?max_symbols=15",
