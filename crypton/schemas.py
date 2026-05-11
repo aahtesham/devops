@@ -1,76 +1,47 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from pydantic import BaseModel, Field
-
-from crypton.scanner import SymbolScan
+from crypton.binance import BinancePublicClient
 
 
-class UpstreamMap(BaseModel):
-    """Documents which Binance Spot REST paths the app calls."""
-
-    base_url: str = Field(description="Binance Spot REST base")
-    exchange_info: str = Field(default="GET /api/v3/exchangeInfo")
-    klines: str = Field(default="GET /api/v3/klines")
-    ticker_24h: str = Field(default="GET /api/v3/ticker/24hr")
-
-
-class SymbolListResponse(BaseModel):
-    upstream: UpstreamMap
-    count: int
-    symbols: List[str]
-
-
-class KlinesResponse(BaseModel):
-    upstream: str
-    symbol: str
-    interval: str
-    count: int
-    klines: List[List[Any]]
+def _symbol_has_spot(row: Dict[str, Any]) -> bool:
+    """
+    Binance often returns `"permissions": []` and uses `permissionSets` + flags instead.
+    See: https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md
+    """
+    if row.get("isSpotTradingAllowed") is True:
+        return True
+    perms = row.get("permissions") or []
+    if "SPOT" in perms:
+        return True
+    for group in row.get("permissionSets") or []:
+        if isinstance(group, (list, tuple)) and "SPOT" in group:
+            return True
+    return False
 
 
-class RSISnapshotResponse(BaseModel):
-    upstream: str
-    symbol: str
-    interval: str
-    rsi_period: int
-    scan: Dict[str, Any]
+def fetch_spot_usdt_symbols(client: BinancePublicClient) -> List[str]:
+    """
+    Return Binance *spot* USDT symbols that are TRADING and spot-eligible.
 
-
-class ScanRow(BaseModel):
-    symbol: str
-    reason: str
-    rsi_eligible: bool
-    strategy_match: bool
-    rsi_last_closed: Optional[float] = None
-    rsi_prev_closed: Optional[float] = None
-    last_close: Optional[float] = None
-
-
-class ScanResponse(BaseModel):
-    upstream: str
-    interval: str
-    scanned: int
-    strategy_matches: int
-    listed: int
-    rows: List[ScanRow]
-    excluded_summary: Dict[str, int]
-
-
-def symbol_scan_to_row(r: SymbolScan) -> ScanRow:
-    return ScanRow(
-        symbol=r.symbol,
-        reason=r.reason,
-        rsi_eligible=r.rsi_eligible,
-        strategy_match=r.strategy_match,
-        rsi_last_closed=r.rsi_last_closed,
-        rsi_prev_closed=r.rsi_prev_closed,
-        last_close=r.last_close,
+    Uses: GET /api/v3/exchangeInfo (with permissions=SPOT when supported).
+    """
+    data: Dict[str, Any] = client.get_json(
+        "/api/v3/exchangeInfo",
+        params={"permissions": "SPOT"},
     )
+    symbols_out: List[str] = []
+    for row in data.get("symbols", []):
+        if row.get("status") != "TRADING":
+            continue
+        if row.get("quoteAsset") != "USDT":
+            continue
+        if not _symbol_has_spot(row):
+            continue
+        sym = row.get("symbol")
+        if isinstance(sym, str) and sym.endswith("USDT"):
+            symbols_out.append(sym)
 
-
-class TickerTopResponse(BaseModel):
-    upstream: str
-    count: int
-    tickers: List[Dict[str, Any]]
+    symbols_out.sort()
+    return symbols_out

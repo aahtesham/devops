@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Query
 
 from crypton.binance import BinancePublicClient
-from crypton.config import Settings
+from crypton.config import Settings, parse_staircase_levels_string
 from crypton.scanner import scan_one_symbol, scan_symbols
 from crypton.schemas import (
     KlinesResponse,
@@ -79,8 +79,13 @@ def meta() -> Dict[str, Any]:
             "interval_default": s.interval,
             "rsi_period": s.rsi_period,
             "min_bars_for_rsi": s.min_bars_for_rsi,
-            "strategy_rsi_min": s.strategy_rsi_min,
-            "strategy_require_rising": s.strategy_require_rising,
+            "strategy_staircase_levels": list(s.strategy_staircase_levels)
+            if s.strategy_staircase_levels
+            else None,
+            "strategy_legacy": {
+                "rsi_min": s.strategy_rsi_min,
+                "require_rising": s.strategy_require_rising,
+            },
         },
     }
 
@@ -150,9 +155,18 @@ def api_ticker_top_volume(
 
 
 @app.get("/api/v1/rsi/{symbol}", response_model=RSISnapshotResponse)
-def api_rsi_snapshot(symbol: str) -> RSISnapshotResponse:
+def api_rsi_snapshot(
+    symbol: str,
+    staircase: Optional[str] = Query(
+        None,
+        description="Override staircase e.g. 52,53,54,55; omit uses env. Use 'off' for legacy RSI rule.",
+    ),
+) -> RSISnapshotResponse:
     sym = _norm_symbol(symbol)
-    s = Settings.from_env()
+    base = Settings.from_env()
+    s = base
+    if staircase is not None:
+        s = replace(base, strategy_staircase_levels=parse_staircase_levels_string(staircase))
     with BinancePublicClient(s) as client:
         row = scan_one_symbol(client, s, sym)
     payload = symbol_scan_to_row(row).model_dump()
@@ -178,6 +192,10 @@ def api_scan(
         le=2.0,
         description="Override delay between kline calls (seconds)",
     ),
+    staircase: Optional[str] = Query(
+        None,
+        description="e.g. 52,53,54,55 overrides env for this request; 'off' = legacy RSI>min rising",
+    ),
 ) -> ScanResponse:
     base = Settings.from_env()
     s = replace(
@@ -187,6 +205,8 @@ def api_scan(
     )
     if request_delay_s is not None:
         s = replace(s, request_delay_s=float(request_delay_s))
+    if staircase is not None:
+        s = replace(s, strategy_staircase_levels=parse_staircase_levels_string(staircase))
 
     with BinancePublicClient(s) as client:
         symbols = fetch_spot_usdt_symbols(client)
@@ -211,11 +231,15 @@ def api_scan(
     return ScanResponse(
         upstream=f"{s.base_url}/api/v3/exchangeInfo + /api/v3/klines",
         interval=s.interval,
+        symbols_in_universe=len(symbols),
         scanned=len(rows),
         strategy_matches=strategy_hits,
         listed=len(listed),
         rows=[symbol_scan_to_row(r) for r in listed],
         excluded_summary=reasons,
+        strategy_staircase_levels=list(s.strategy_staircase_levels)
+        if s.strategy_staircase_levels
+        else None,
     )
 
 
@@ -232,6 +256,6 @@ def root() -> Dict[str, Any]:
             "GET /api/v1/klines/{symbol}?interval=1h&limit=300",
             "GET /api/v1/ticker/top-volume?top=50",
             "GET /api/v1/rsi/{symbol}",
-            "GET /api/v1/scan?max_symbols=80&output_all=false",
+            "GET /api/v1/scan?max_symbols=80&output_all=false&staircase=52,53,54,55",
         ],
     }

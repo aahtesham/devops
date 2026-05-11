@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Optional, Tuple
 
 
 def _env_int(name: str, default: int) -> int:
@@ -16,6 +17,29 @@ def _env_float(name: str, default: float) -> float:
     if raw is None or raw.strip() == "":
         return default
     return float(raw)
+
+
+def parse_staircase_levels_string(raw: str) -> Optional[Tuple[float, ...]]:
+    """Parse '52,53,54,55' or return None for 'off' / invalid."""
+    raw = raw.strip()
+    if raw.lower() in ("", "off", "none", "0"):
+        return None
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if len(parts) < 2:
+        return None
+    try:
+        return tuple(float(p) for p in parts)
+    except ValueError:
+        return None
+
+
+def _parse_staircase_env() -> Optional[Tuple[float, ...]]:
+    """
+    STRATEGY_STAIRCASE_LEVELS default 52,53,54,55.
+    Set to 'off' / empty / 'none' to use legacy RSI-min + rising rule instead.
+    """
+    raw = os.environ.get("STRATEGY_STAIRCASE_LEVELS", "52,53,54,55")
+    return parse_staircase_levels_string(raw)
 
 
 @dataclass(frozen=True)
@@ -34,7 +58,10 @@ class Settings:
     request_delay_s: float = 0.08
     # 0 = no cap (all symbols); else only first N after stable sort
     max_symbols: int = 0
-    # Optional strategy filter: only include if RSI > threshold and rising
+    # If set (default 52,53,54,55): strategy = staircase strict-up on last N RSI bars.
+    # If None (env STRATEGY_STAIRCASE_LEVELS=off): use strategy_rsi_min + strategy_require_rising.
+    strategy_staircase_levels: Optional[Tuple[float, ...]] = None
+    # Optional legacy strategy when staircase disabled
     strategy_rsi_min: float = 50.0
     strategy_require_rising: bool = True
     # If true, print every RSI-eligible symbol (not only strategy matches)
@@ -51,6 +78,7 @@ class Settings:
             min_bars_for_rsi=_env_int("MIN_BARS_FOR_RSI", 60),
             request_delay_s=_env_float("REQUEST_DELAY_S", 0.08),
             max_symbols=_env_int("MAX_SYMBOLS", 0),
+            strategy_staircase_levels=_parse_staircase_env(),
             strategy_rsi_min=_env_float("STRATEGY_RSI_MIN", 50.0),
             strategy_require_rising=os.environ.get("STRATEGY_REQUIRE_RISING", "1")
             not in ("0", "false", "False"),

@@ -5,7 +5,7 @@ Python project that:
 1. Loads **Binance Spot** `USDT` symbols (`TRADING` + `SPOT` permission) via `exchangeInfo`
 2. Fetches **1h klines** **one symbol at a time** (with a small delay to reduce rate limits)
 3. Drops the **in-progress** last candle, checks **minimum history**, computes **Wilder RSI(14)**
-4. Builds a **list** of RSI-eligible symbols; by default prints only **strategy matches** (RSI > 50 and rising). Set `OUTPUT_ALL_RSI_ELIGIBLE=1` to print every eligible row with a `strategy=Y/N` flag.
+4. Strategy: **default** = last **4** closed RSI bars must be **≥ 52, 53, 54, 55** (floors) and **strictly increasing** each bar (`STRATEGY_STAIRCASE_LEVELS`, default `52,53,54,55`). Set `STRATEGY_STAIRCASE_LEVELS=off` to use legacy **RSI > min + rising** instead.
 
 ## Setup
 
