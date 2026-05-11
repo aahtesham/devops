@@ -1,10 +1,10 @@
 """
-FastAPI: HTTP mapping to Binance Spot public APIs + RSI scanner.
+Starlette HTTP API (no Pydantic / no pydantic-core → no Rust build on Render).
 
 Run locally:
-  uvicorn app:app --reload --host 0.0.0.0 --port 8000
+  uvicorn app:app --reload --host 127.0.0.1 --port 8000
 
-Render start command:
+Render:
   uvicorn app:app --host 0.0.0.0 --port $PORT
 """
 
@@ -13,131 +13,145 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 
 from crypton.binance import BinancePublicClient
 from crypton.config import Settings, parse_staircase_levels_string
 from crypton.scanner import scan_one_symbol, scan_symbols
-from crypton.schemas import (
-    KlinesResponse,
-    RSISnapshotResponse,
-    ScanResponse,
-    ScanRow,
-    SymbolListResponse,
-    TickerTopResponse,
-    UpstreamMap,
-    symbol_scan_to_row,
-)
+from crypton.schemas import symbol_scan_to_dict, upstream_map_dict
 from crypton.symbols import fetch_spot_usdt_symbols
 
-app = FastAPI(title="Crypton", version="0.1.0", description="Binance Spot public data + RSI scan")
+
+def _json(data: Any, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(data, status_code=status_code)
 
 
-def _settings(
-    max_symbols: Optional[int] = None,
-    output_all_rsi_eligible: Optional[bool] = None,
-    request_delay_s: Optional[float] = None,
-) -> Settings:
-    s = Settings.from_env()
-    kwargs: Dict[str, Any] = {}
-    if max_symbols is not None:
-        kwargs["max_symbols"] = max_symbols
-    if output_all_rsi_eligible is not None:
-        kwargs["output_all_rsi_eligible"] = output_all_rsi_eligible
-    if request_delay_s is not None:
-        kwargs["request_delay_s"] = request_delay_s
-    return replace(s, **kwargs) if kwargs else s
+def _parse_int(
+    qp: Any, key: str, default: Optional[int], *, min_v: Optional[int] = None, max_v: Optional[int] = None
+) -> int:
+    raw = qp.get(key)
+    if raw is None or raw == "":
+        if default is None:
+            raise ValueError(f"missing {key}")
+        return default
+    n = int(raw)
+    if min_v is not None and n < min_v:
+        raise ValueError(f"{key} must be >= {min_v}")
+    if max_v is not None and n > max_v:
+        raise ValueError(f"{key} must be <= {max_v}")
+    return n
+
+
+def _parse_float(qp: Any, key: str, default: Optional[float]) -> Optional[float]:
+    raw = qp.get(key)
+    if raw is None or raw == "":
+        return default
+    return float(raw)
+
+
+def _parse_bool(qp: Any, key: str, default: bool) -> bool:
+    raw = qp.get(key)
+    if raw is None or raw == "":
+        return default
+    return raw.lower() in ("1", "true", "yes", "on")
 
 
 def _norm_symbol(symbol: str) -> str:
     s = symbol.strip().upper()
     if not s.endswith("USDT") or len(s) < 6:
-        raise HTTPException(
-            status_code=400,
-            detail="symbol must look like BTCUSDT (spot USDT pair)",
-        )
+        raise ValueError("symbol must look like BTCUSDT (spot USDT pair)")
     return s
 
 
-@app.get("/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok"}
+def health(request: Request) -> JSONResponse:
+    return _json({"status": "ok"})
 
 
-@app.get("/api/v1/meta")
-def meta() -> Dict[str, Any]:
+def meta(request: Request) -> JSONResponse:
     s = Settings.from_env()
-    return {
-        "service": "crypton",
-        "binance_spot_base_url": s.base_url,
-        "mapped_paths": {
-            "symbols": "GET /api/v3/exchangeInfo → filtered TRADING + USDT + SPOT",
-            "klines": "GET /api/v3/klines",
-            "ticker_24h": "GET /api/v3/ticker/24hr",
-        },
-        "scanner": {
-            "interval_default": s.interval,
-            "rsi_period": s.rsi_period,
-            "min_bars_for_rsi": s.min_bars_for_rsi,
-            "strategy_staircase_levels": list(s.strategy_staircase_levels)
-            if s.strategy_staircase_levels
-            else None,
-            "strategy_legacy": {
-                "rsi_min": s.strategy_rsi_min,
-                "require_rising": s.strategy_require_rising,
+    return _json(
+        {
+            "service": "crypton",
+            "binance_spot_base_url": s.base_url,
+            "mapped_paths": {
+                "symbols": "GET /api/v3/exchangeInfo → filtered TRADING + USDT + SPOT",
+                "klines": "GET /api/v3/klines",
+                "ticker_24h": "GET /api/v3/ticker/24hr",
             },
-        },
-    }
-
-
-@app.get("/api/v1/upstream", response_model=UpstreamMap)
-def upstream_map() -> UpstreamMap:
-    s = Settings.from_env()
-    return UpstreamMap(base_url=s.base_url)
-
-
-@app.get("/api/v1/symbols", response_model=SymbolListResponse)
-def api_symbols(
-    max: int = Query(0, ge=0, description="0 = return all; else cap list after sort"),
-) -> SymbolListResponse:
-    s = Settings.from_env()
-    with BinancePublicClient(s) as client:
-        symbols = fetch_spot_usdt_symbols(client)
-    if max > 0:
-        symbols = symbols[:max]
-    return SymbolListResponse(
-        upstream=UpstreamMap(base_url=s.base_url),
-        count=len(symbols),
-        symbols=symbols,
+            "scanner": {
+                "interval_default": s.interval,
+                "rsi_period": s.rsi_period,
+                "min_bars_for_rsi": s.min_bars_for_rsi,
+                "strategy_staircase_levels": list(s.strategy_staircase_levels)
+                if s.strategy_staircase_levels
+                else None,
+                "strategy_legacy": {
+                    "rsi_min": s.strategy_rsi_min,
+                    "require_rising": s.strategy_require_rising,
+                },
+            },
+        }
     )
 
 
-@app.get("/api/v1/klines/{symbol}", response_model=KlinesResponse)
-def api_klines(
-    symbol: str,
-    interval: str = Query("1h", description="Binance kline interval, e.g. 1h, 4h, 1d"),
-    limit: int = Query(300, ge=2, le=1000),
-) -> KlinesResponse:
-    sym = _norm_symbol(symbol)
+def upstream(request: Request) -> JSONResponse:
+    s = Settings.from_env()
+    return _json(upstream_map_dict(s.base_url))
+
+
+def api_symbols(request: Request) -> JSONResponse:
+    try:
+        max_n = _parse_int(request.query_params, "max", 0, min_v=0)
+    except ValueError as e:
+        return _json({"detail": str(e)}, 400)
+    s = Settings.from_env()
+    with BinancePublicClient(s) as client:
+        symbols = fetch_spot_usdt_symbols(client)
+    if max_n > 0:
+        symbols = symbols[:max_n]
+    return _json(
+        {
+            "upstream": upstream_map_dict(s.base_url),
+            "count": len(symbols),
+            "symbols": symbols,
+        }
+    )
+
+
+def api_klines(request: Request) -> JSONResponse:
+    symbol = request.path_params["symbol"]
+    qp = request.query_params
+    try:
+        sym = _norm_symbol(symbol)
+        interval = qp.get("interval") or "1h"
+        limit = _parse_int(qp, "limit", 300, min_v=2, max_v=1000)
+    except ValueError as e:
+        return _json({"detail": str(e)}, 400)
     s = replace(Settings.from_env(), interval=interval, kline_limit=limit)
     with BinancePublicClient(s) as client:
         klines = client.get_json(
             "/api/v3/klines",
             params={"symbol": sym, "interval": s.interval, "limit": limit},
         )
-    return KlinesResponse(
-        upstream=f"{s.base_url}/api/v3/klines",
-        symbol=sym,
-        interval=interval,
-        count=len(klines),
-        klines=klines,
+    return _json(
+        {
+            "upstream": f"{s.base_url}/api/v3/klines",
+            "symbol": sym,
+            "interval": interval,
+            "count": len(klines),
+            "klines": klines,
+        }
     )
 
 
-@app.get("/api/v1/ticker/top-volume", response_model=TickerTopResponse)
-def api_ticker_top_volume(
-    top: int = Query(50, ge=1, le=500),
-) -> TickerTopResponse:
+def api_ticker_top_volume(request: Request) -> JSONResponse:
+    try:
+        top = _parse_int(request.query_params, "top", 50, min_v=1, max_v=500)
+    except ValueError as e:
+        return _json({"detail": str(e)}, 400)
     s = Settings.from_env()
     with BinancePublicClient(s) as client:
         tickers: List[Dict[str, Any]] = client.get_json("/api/v3/ticker/24hr")
@@ -147,56 +161,50 @@ def api_ticker_top_volume(
     except (TypeError, ValueError):
         usdt.sort(key=lambda t: str(t.get("quoteVolume", "0")), reverse=True)
     usdt = usdt[:top]
-    return TickerTopResponse(
-        upstream=f"{s.base_url}/api/v3/ticker/24hr",
-        count=len(usdt),
-        tickers=usdt,
+    return _json(
+        {
+            "upstream": f"{s.base_url}/api/v3/ticker/24hr",
+            "count": len(usdt),
+            "tickers": usdt,
+        }
     )
 
 
-@app.get("/api/v1/rsi/{symbol}", response_model=RSISnapshotResponse)
-def api_rsi_snapshot(
-    symbol: str,
-    staircase: Optional[str] = Query(
-        None,
-        description="Override staircase e.g. 52,53,54,55; omit uses env. Use 'off' for legacy RSI rule.",
-    ),
-) -> RSISnapshotResponse:
-    sym = _norm_symbol(symbol)
+def api_rsi_snapshot(request: Request) -> JSONResponse:
+    symbol = request.path_params["symbol"]
+    qp = request.query_params
+    try:
+        sym = _norm_symbol(symbol)
+    except ValueError as e:
+        return _json({"detail": str(e)}, 400)
     base = Settings.from_env()
     s = base
-    if staircase is not None:
-        s = replace(base, strategy_staircase_levels=parse_staircase_levels_string(staircase))
+    if qp.get("staircase") is not None:
+        s = replace(base, strategy_staircase_levels=parse_staircase_levels_string(qp["staircase"]))
     with BinancePublicClient(s) as client:
         row = scan_one_symbol(client, s, sym)
-    payload = symbol_scan_to_row(row).model_dump()
-    return RSISnapshotResponse(
-        upstream=f"{s.base_url}/api/v3/klines + local RSI",
-        symbol=sym,
-        interval=s.interval,
-        rsi_period=s.rsi_period,
-        scan=payload,
+    return _json(
+        {
+            "upstream": f"{s.base_url}/api/v3/klines + local RSI",
+            "symbol": sym,
+            "interval": s.interval,
+            "rsi_period": s.rsi_period,
+            "scan": symbol_scan_to_dict(row),
+        }
     )
 
 
-@app.get("/api/v1/scan", response_model=ScanResponse)
-def api_scan(
-    max_symbols: int = Query(80, ge=1, le=500, description="How many symbols to scan (rate limits)"),
-    output_all: bool = Query(
-        False,
-        description="If true, list every RSI-eligible row with strategy_match flag; else only strategy matches + eligible rows per env OUTPUT_ALL_RSI_ELIGIBLE",
-    ),
-    request_delay_s: Optional[float] = Query(
-        None,
-        ge=0.0,
-        le=2.0,
-        description="Override delay between kline calls (seconds)",
-    ),
-    staircase: Optional[str] = Query(
-        None,
-        description="e.g. 52,53,54,55 overrides env for this request; 'off' = legacy RSI>min rising",
-    ),
-) -> ScanResponse:
+def api_scan(request: Request) -> JSONResponse:
+    qp = request.query_params
+    try:
+        max_symbols = _parse_int(qp, "max_symbols", 80, min_v=1, max_v=500)
+        output_all = _parse_bool(qp, "output_all", False)
+        request_delay_s = _parse_float(qp, "request_delay_s", None)
+        if request_delay_s is not None and (request_delay_s < 0.0 or request_delay_s > 2.0):
+            raise ValueError("request_delay_s must be between 0 and 2")
+    except ValueError as e:
+        return _json({"detail": str(e)}, 400)
+
     base = Settings.from_env()
     s = replace(
         base,
@@ -205,19 +213,15 @@ def api_scan(
     )
     if request_delay_s is not None:
         s = replace(s, request_delay_s=float(request_delay_s))
-    if staircase is not None:
-        s = replace(s, strategy_staircase_levels=parse_staircase_levels_string(staircase))
+    if qp.get("staircase") is not None:
+        s = replace(s, strategy_staircase_levels=parse_staircase_levels_string(qp["staircase"]))
 
     with BinancePublicClient(s) as client:
         symbols = fetch_spot_usdt_symbols(client)
         symbols = symbols[: s.max_symbols] if s.max_symbols > 0 else symbols
         rows = scan_symbols(client, s, symbols)
 
-    listed = [
-        r
-        for r in rows
-        if r.rsi_eligible and (r.strategy_match or s.output_all_rsi_eligible)
-    ]
+    listed = [r for r in rows if r.rsi_eligible and (r.strategy_match or s.output_all_rsi_eligible)]
     listed.sort(key=lambda r: (r.rsi_last_closed or 0.0), reverse=True)
     strategy_hits = sum(1 for r in rows if r.rsi_eligible and r.strategy_match)
 
@@ -228,34 +232,52 @@ def api_scan(
         key = r.reason.split(":", 1)[0]
         reasons[key] = reasons.get(key, 0) + 1
 
-    return ScanResponse(
-        upstream=f"{s.base_url}/api/v3/exchangeInfo + /api/v3/klines",
-        interval=s.interval,
-        symbols_in_universe=len(symbols),
-        scanned=len(rows),
-        strategy_matches=strategy_hits,
-        listed=len(listed),
-        rows=[symbol_scan_to_row(r) for r in listed],
-        excluded_summary=reasons,
-        strategy_staircase_levels=list(s.strategy_staircase_levels)
-        if s.strategy_staircase_levels
-        else None,
+    return _json(
+        {
+            "upstream": f"{s.base_url}/api/v3/exchangeInfo + /api/v3/klines",
+            "interval": s.interval,
+            "symbols_in_universe": len(symbols),
+            "scanned": len(rows),
+            "strategy_matches": strategy_hits,
+            "listed": len(listed),
+            "rows": [symbol_scan_to_dict(r) for r in listed],
+            "excluded_summary": reasons,
+            "strategy_staircase_levels": list(s.strategy_staircase_levels)
+            if s.strategy_staircase_levels
+            else None,
+        }
     )
 
 
-@app.get("/")
-def root() -> Dict[str, Any]:
-    return {
-        "service": "crypton",
-        "docs": "/docs",
-        "health": "/health",
-        "endpoints": [
-            "GET /api/v1/meta",
-            "GET /api/v1/upstream",
-            "GET /api/v1/symbols?max=0",
-            "GET /api/v1/klines/{symbol}?interval=1h&limit=300",
-            "GET /api/v1/ticker/top-volume?top=50",
-            "GET /api/v1/rsi/{symbol}",
-            "GET /api/v1/scan?max_symbols=80&output_all=false&staircase=52,53,54,55",
-        ],
-    }
+def root(request: Request) -> JSONResponse:
+    return _json(
+        {
+            "service": "crypton",
+            "framework": "starlette",
+            "health": "/health",
+            "endpoints": [
+                "GET /api/v1/meta",
+                "GET /api/v1/upstream",
+                "GET /api/v1/symbols?max=0",
+                "GET /api/v1/klines/{symbol}?interval=1h&limit=300",
+                "GET /api/v1/ticker/top-volume?top=50",
+                "GET /api/v1/rsi/{symbol}",
+                "GET /api/v1/scan?max_symbols=80&output_all=false&staircase=52,53,54,55",
+            ],
+        }
+    )
+
+
+routes = [
+    Route("/health", health, methods=["GET"]),
+    Route("/api/v1/meta", meta, methods=["GET"]),
+    Route("/api/v1/upstream", upstream, methods=["GET"]),
+    Route("/api/v1/symbols", api_symbols, methods=["GET"]),
+    Route("/api/v1/klines/{symbol}", api_klines, methods=["GET"]),
+    Route("/api/v1/ticker/top-volume", api_ticker_top_volume, methods=["GET"]),
+    Route("/api/v1/rsi/{symbol}", api_rsi_snapshot, methods=["GET"]),
+    Route("/api/v1/scan", api_scan, methods=["GET"]),
+    Route("/", root, methods=["GET"]),
+]
+
+app = Starlette(routes=routes)
