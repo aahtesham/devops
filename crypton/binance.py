@@ -42,10 +42,15 @@ class BinancePublicClient:
         return self._bases[self._base_idx]
 
     def _new_client(self) -> httpx.Client:
+        headers = {
+            "User-Agent": self._settings.binance_user_agent,
+            "Accept": "application/json",
+        }
         return httpx.Client(
             base_url=self._bases[self._base_idx],
             timeout=30.0,
             trust_env=self._settings.httpx_trust_env,
+            headers=headers,
         )
 
     def _advance_base(self) -> bool:
