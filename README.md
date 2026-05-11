@@ -59,6 +59,14 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 **Render start command:** `uvicorn app:app --host 0.0.0.0 --port $PORT`
 
+### Render build: `pydantic-core` / Rust / read-only filesystem
+
+If the build uses **Python 3.14**, `pydantic-core` may try to **compile from source** (Rust/maturin) and fail with **read-only file system** for Cargo. Fix: use **Python 3.12.x** so pip gets **binary wheels**.
+
+1. In the Render service: **Environment → add** `PYTHON_VERSION` = `3.12.8` (or another **3.12** patch Render supports).
+2. Commit **`runtime.txt`** (`python-3.12.8`) and **`.python-version`** from this repo so the platform picks 3.12 when supported.
+3. Redeploy (clear build cache if the old 3.14 venv sticks).
+
 ## Notes
 
 - Uses **public** endpoints only (no API keys).
